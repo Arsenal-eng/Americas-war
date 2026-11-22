@@ -78,6 +78,7 @@ let FFA=false;
 let PLUS=false;
 let BOTDECIDE=false;
 let NOCLIP=false;
+let INFMONEY=false;
 let ZERO=false;
 // noclip: every division of the player is worth 999 in battle
 const strengthOwn=(v,owner)=>(NOCLIP&&isMy(owner))?999*tot(v):pw(v)*(isMy(owner)?ideoV(owner,'atk',1):1);
@@ -739,11 +740,13 @@ function setup(){
   h+=`<div class="row"><label><input type="checkbox" ${BOTDECIDE?'checked':''} onchange="BOTDECIDE=this.checked;setup()"> Боты решают судьбу капитулировавших</label></div>`;
   h+=`<div class="row"><label><input type="checkbox" ${NOCLIP?'checked':''} onchange="NOCLIP=this.checked;setup()"> noclip (мои дивизии имеют силу 999)</label></div>`;
   h+=`<div class="row"><label><input type="checkbox" ${ZERO?'checked':''} onchange="ZERO=this.checked;setup()"> С нуля: ни союзов, ни врагов в начале</label></div>`;
+  h+=`<div class="row"><label><input type="checkbox" ${INFMONEY?'checked':''} onchange="INFMONEY=this.checked;setup()"> inf money (чит: казна не кончается)</label></div>`;
   if(assigned.length){
     h+=`<h2>Ты играешь за</h2><div class="gr">`+assigned.map(c=>`<button class="g ${c===SELPL?'on':''}" onclick="SELPL='${c}';setup()">${CN[c].n}</button>`).join('')+`</div><p class="mut">Остальные страны твоего альянса управляются ботами.</p>`;
   }
   h+=`<div class="row"><button class="${SELPL==='SPEC'?'':'g'}" onclick="SELPL='SPEC';setup()">Наблюдатель (spectator)</button></div>`;
   if(SCEN===1)h+=`<div class="row"><button class="g" onclick="SEL={PY:0,AR:1,BR:1,UY:1};SELPL='PY';setup()">Шаблон: Парагвайская война</button></div>`;
+  h+=scenListHTML();
   h+=`<div class="row"><button onclick="begin()" ${ok?'':'disabled'}>Начать игру</button></div><p class="mut">Игра начнётся за 10 месяцев до войны: первые 10 ходов — мир, можно готовить армию, атаковать нельзя.</p>`;
   if(used.length>=2&&!hasBorder)h+='<p class="mut">Альянсы нигде не граничат. Назначь страны так, чтобы между ними была граница.</p>';
   h+=`<div class="row"><button class="g" onclick="lobby()">К мультиплееру</button></div>`;
@@ -767,7 +770,7 @@ const mov=pid=>tot(movv(pid));
 // divisions of a province not yet committed to a plan
 const avail=pid=>{const c=Z();S.plans.forEach(q=>{if(q.a===pid)q.v.forEach((x,t)=>c[t]+=x)});return movv(pid).map((x,t)=>Math.max(0,x-c[t]))};
 const lostOf=c=>P.filter(p=>p.c===c&&(S.ctl[p.id]===null||S.team[S.ctl[p.id]]!==S.team[c])).length;
-const vis=pid=>{if(S.spec)return true;const c=S.ctl[pid];if(c===null||S.team[c]===S.team[S.pl])return true;return P[pid].adj.some(b=>S.ctl[b]!==null&&S.team[S.ctl[b]]===S.team[S.pl])};
+const vis=pid=>{if(S.spec)return true;if(yardZones(P[pid]).some(z=>S.zf[z]&&isMy(S.zf[z].c)))return true;const c=S.ctl[pid];if(c===null||S.team[c]===S.team[S.pl])return true;return P[pid].adj.some(b=>S.ctl[b]!==null&&S.team[S.ctl[b]]===S.team[S.pl])};
 const rate=pid=>{const c=S.ctl[pid];if(c===null||!S.annex[pid])return 0;return (S.master[c]!==undefined?3:7)*ideoV(c,'rebel',1)};
 const comp=v=>v.map((x,t)=>x?`${NM[t]} ${x}`:'').filter(Boolean).join(', ')||'пусто';
 const owner=c=>c===S.pl?'у тебя':c===null?'нейтрально':CN[c].n;
@@ -783,6 +786,7 @@ function begin(){
   P.forEach(p=>{if(S.act[p.c]){S.ctl[p.id]=p.c;S.u[p.id]=[CN[p.c].p,0,0,0]}});
   CK.forEach(c=>{if(S.act[c])S.G[c]=incomeOf(c)*2});
   if(S.G[S.pl]===undefined)S.G[S.pl]=0;
+  if(INFMONEY)S.G[S.pl]=99999;
   if(S.spec)L('Ты наблюдаешь за войной ботов.');
   L('Мир. До войны 10 месяцев: готовь армию и заводы.');
   $('#ov').style.display='none';render();
@@ -1059,7 +1063,7 @@ function renderLobby(){
   if(LB.room)return renderRoom(ov);
   const fl=k=>LB.f[k]===undefined?'любые':(k==='SCEN'?(LB.f[k]===2?'Аргентина':'Классика'):(LB.f[k]?'да':'нет'));
   let h=`<h1>Комнаты</h1><div class="mut">${DB?'':'Общее хранилище недоступно: доступна одиночная игра. '}${LB.msg}</div>`;
-  h+=`<div class="row"><button class="g" onclick="setup()">Одиночная игра</button></div>`;
+  h+=`<div class="row"><button class="g" onclick="setup()">Одиночная игра</button><button class="g" onclick="editor()">Редактор карты</button></div>`;
   h+=`<h2 style="margin-top:12px">Создать комнату</h2><div class="row">`
     +`<button class="g" onclick="togM('PLUS')">Провинции+: ${PLUS?'да':'нет'}</button>`
     +`<button class="g" onclick="togM('ZERO')">С нуля: ${ZERO?'да':'нет'}</button>`
@@ -1157,6 +1161,184 @@ async function lbStart(){
   $('#ov').style.display='none';
   begin();
 }
+/* ---------- map editor: countries built from the existing provinces ---------- */
+// ED.tool: 'yard' | 'fac' | 'del' applies to the next tapped province; ED.capFor: country whose capital is being picked
+const ED={sel:new Set(),own:null,countries:[],nextId:1,msg:'',tool:null,capFor:null,detail:null,yard:{},fac:{}};
+function editor(){LB.active=false;if(!ED.own)ED.own=P.map(()=>-1);renderEditor()}
+function edMsg(t){ED.msg=t;renderEditor()}
+const edCountry=id=>ED.countries.find(c=>c.id===id);
+function renderEditor(){
+  const ov=$('#ov');ov.style.display='block';
+  let h=`<h1>Редактор карты</h1><div class="mut" id="edmsg">${ED.msg}</div>`;
+  h+=`<canvas id="edc" width="${2*W}" height="${2*H}" style="width:100%;max-width:520px;display:block;margin:8px auto"></canvas>`;
+  if(ED.detail!==null){
+    const c=edCountry(ED.detail);
+    if(!c){ED.detail=null;return renderEditor()}
+    h+=`<h2>${c.name}</h2>`;
+    h+=`<div class="row"><span style="min-width:200px">Экономика на провинцию: <b>${c.econ}</b></span><input type="range" min="1" max="10" value="${c.econ}" onchange="edSet(${c.id},'econ',this.value)"></div>`;
+    h+=`<div class="row"><span style="min-width:200px">Стартовые войска на провинцию: <b>${c.start}</b></span><input type="range" min="0" max="5" value="${c.start}" onchange="edSet(${c.id},'start',this.value)"></div>`;
+    h+=`<div class="row"><span style="min-width:200px">Агрессия: <b>${c.aggr}</b> из 30</span><input type="range" min="0" max="30" value="${c.aggr}" onchange="edSet(${c.id},'aggr',this.value)"></div>`;
+    const cap=c.capital!=null&&P[c.capital]?P[c.capital].name:'не выбрана';
+    h+=`<div class="row"><span>Столица: ${cap}</span><button onclick="edCapStart(${c.id})">Выбрать столичную провинцию</button></div>`;
+    h+=`<div class="row"><button class="g" onclick="ED.detail=null;ED.capFor=null;renderEditor()">Назад</button></div>`;
+  }else{
+    h+=`<div class="mut">Выбрано провинций: ${ED.sel.size}. ${ED.tool?'Тапни провинцию, чтобы применить инструмент.':''}</div>`;
+    h+=`<div class="row"><input id="edn" placeholder="название страны"><button onclick="edCreate()">Создать страну</button><button class="g" onclick="ED.sel.clear();renderEditor()">Снять выбор</button></div>`;
+    h+=`<h2 style="margin-top:10px">Инструменты</h2><div class="row">`
+      +`<button class="${ED.tool==='yard'?'':'g'}" onclick="edTool('yard')">Добавить верфь</button>`
+      +`<button class="${ED.tool==='fac'?'':'g'}" onclick="edTool('fac')">Добавить завод</button>`
+      +`<button class="${ED.tool==='del'?'':'g'}" onclick="edTool('del')">Убрать верфь/завод</button></div>`;
+    h+=`<h2 style="margin-top:10px">Страны</h2>`;
+    h+=ED.countries.map(c=>`<div class="row"><span style="color:hsl(${c.hue} 60% 60%)">■</span><button class="g" onclick="edDetail(${c.id})">${c.name}</button><span class="mut">${c.provs.length} пров.</span><button class="g z" onclick="edDel(${c.id})">удалить</button></div>`).join('');
+    h+=`<h2 style="margin-top:12px">Сценарий</h2><div class="row"><button onclick="edExport()">Экспорт</button><button class="g" onclick="edImport()">Импорт</button></div><textarea id="edt" rows="5" style="width:100%"></textarea><div class="row"><input id="edsn" placeholder="название сценария"><button onclick="edSave()">Сохранить</button></div>`;
+  }
+  h+=`<div class="row"><button class="g" onclick="ED.active=false;ED.tool=null;ED.capFor=null;ED.detail=null;lobby()">В лобби</button></div>`;
+  ov.innerHTML=h;
+  drawEditor();
+  $('#edc').addEventListener('click',edPick);
+}
+// saved scenarios live in the browser (localStorage), listed in the single-player setup
+const SCEN_KEY='americas-scenarios';
+function scenStore(){try{return JSON.parse(localStorage.getItem(SCEN_KEY)||'[]')}catch(e){return []}}
+function scenWrite(l){try{localStorage.setItem(SCEN_KEY,JSON.stringify(l))}catch(e){}}
+function scenListHTML(){
+  const l=scenStore();
+  if(!l.length)return '';
+  return `<h2 style="margin-top:10px">Сохранённые сценарии</h2>`+l.map((x,i)=>`<div class="row"><button class="g" onclick="scenOpen(${i})">${x.name}</button><button class="g z" onclick="scenDel(${i})">удалить</button></div>`).join('');
+}
+function scenOpen(i){const x=scenStore()[i];if(!x)return;editor();edLoadText(x.text)}
+function scenDel(i){const l=scenStore();l.splice(i,1);scenWrite(l);setup()}
+function edDump(){
+  return JSON.stringify({v:2,plus:PLUS,countries:ED.countries.map(c=>({
+    name:c.name,hue:c.hue,provs:c.provs,econ:c.econ,start:c.start,aggr:c.aggr,capital:c.capital,
+    yards:c.provs.filter(pid=>ED.yard[pid]),facs:c.provs.filter(pid=>ED.fac[pid])
+  }))});
+}
+function edSave(){
+  const name=((document.getElementById('edsn')||{}).value||'').trim();
+  if(!name)return edMsg('Дай сценарию название.');
+  if(!ED.countries.length)return edMsg('Сначала создай хотя бы одну страну.');
+  const l=scenStore();l.push({name,text:edDump(),t:Date.now()});scenWrite(l);
+  edMsg(`Сценарий «${name}» сохранён.`);
+}
+function edDetail(id){ED.detail=id;ED.capFor=null;ED.tool=null;renderEditor()}
+function edSet(id,k,v){const c=edCountry(id);if(!c)return;c[k]=+v;renderEditor()}
+function edCapStart(id){ED.capFor=id;ED.msg='Тапни провинцию этой страны, она станет столицей.';renderEditor()}
+function edTool(t){ED.tool=ED.tool===t?null:t;ED.msg='';renderEditor()}
+function edPick(e){
+  const cv=$('#edc'),r=cv.getBoundingClientRect();
+  const x=(e.clientX-r.left)*W/r.width,y=(e.clientY-r.top)*H/r.height;
+  const gx=x/CS|0,gy=y/CS|0;
+  if(gx<0||gx>=GW||gy<0||gy>=GH)return;
+  const pid=cell[gy*GW+gx];
+  if(pid<0)return;
+  if(ED.capFor!==null){
+    const c=edCountry(ED.capFor);
+    if(c&&ED.own[pid]===c.id){c.capital=pid;ED.capFor=null;ED.msg='';renderEditor()}
+    else{ED.msg='Столица должна быть в провинции этой страны.';renderEditor()}
+    return;
+  }
+  if(ED.tool){applyTool(pid);return}
+  if(ED.detail!==null)return;
+  if(ED.sel.has(pid))ED.sel.delete(pid);else ED.sel.add(pid);
+  renderEditor();
+}
+function applyTool(pid){
+  if(ED.own[pid]<0){ED.msg='Ставь верфь или завод только в провинцию страны.';return renderEditor()}
+  if(ED.tool==='yard'){
+    if(!isCoast(pid)){ED.msg='Верфь ставится только на побережье.';return renderEditor()}
+    if(ED.fac[pid]){ED.msg='Верфь и завод в одном месте нельзя.';return renderEditor()}
+    ED.yard[pid]=true;
+  }else if(ED.tool==='fac'){
+    if(ED.yard[pid]){ED.msg='Верфь и завод в одном месте нельзя.';return renderEditor()}
+    ED.fac[pid]=true;
+  }else if(ED.tool==='del'){
+    delete ED.yard[pid];delete ED.fac[pid];
+  }
+  ED.msg='';renderEditor();
+}
+function drawEditor(){
+  const cv=$('#edc');if(!cv)return;
+  const g=cv.getContext('2d');
+  g.setTransform(SS,0,0,SS,0,0);g.fillStyle='#0b1822';g.fillRect(0,0,W,H);
+  const cols=P.map((p,pid)=>{
+    if(ED.sel.has(pid))return '#f0c35a';
+    const c=edCountry(ED.own[pid]);
+    return c?`hsl(${c.hue} 45% 40%)`:'#3a4a57';
+  });
+  for(let i=0;i<cell.length;i++){
+    const a=cell[i];
+    if(a===-2)g.fillStyle='#1f5f8b';else if(a<0)continue;else g.fillStyle=cols[a];
+    g.fillRect((i%GW)*CS,(i/GW|0)*CS,CS,CS);
+  }
+  g.fillStyle='rgba(5,15,22,.8)';
+  for(let i=0;i<cell.length;i++){
+    const a=cell[i];if(a<0)continue;
+    const x=i%GW,y=i/GW|0;
+    if(x<GW-1&&cell[i+1]!==a)g.fillRect((x+1)*CS-1,y*CS,2,CS);
+    if(y<GH-1&&cell[i+GW]!==a)g.fillRect(x*CS,(y+1)*CS-1,CS,2);
+  }
+  // markers: factory = gold square, shipyard = blue square, capital = white square
+  P.forEach((p,pid)=>{
+    if(ED.fac[pid]){g.fillStyle='#f0c35a';g.fillRect(p.x+4,p.y+4,8,8)}
+    if(ED.yard[pid]){g.fillStyle='#8fd3ff';g.fillRect(p.x-12,p.y+4,8,8)}
+    const c=edCountry(ED.own[pid]);
+    if(c&&c.capital===pid){g.fillStyle='#ffffff';g.fillRect(p.x-4,p.y-12,8,8)}
+  });
+}
+function edCreate(){
+  const name=((document.getElementById('edn')||{}).value||'').trim();
+  if(!ED.sel.size)return edMsg('Сначала выбери провинции.');
+  if(!name)return edMsg('Дай стране название.');
+  const id=ED.nextId++;
+  ED.countries.push({id,name,hue:(id*67)%360,provs:[],econ:3,start:2,aggr:10,capital:null});
+  ED.sel.forEach(pid=>{ED.own[pid]=id});
+  ED.sel.clear();
+  reindex();
+  ED.msg='';renderEditor();
+}
+// rebuild each country's province list; markers only stay in provinces that still belong to a country
+function reindex(){
+  ED.countries.forEach(c=>{c.provs=[]});
+  P.forEach((p,pid)=>{
+    const c=edCountry(ED.own[pid]);
+    if(c)c.provs.push(pid);else{delete ED.yard[pid];delete ED.fac[pid]}
+  });
+  ED.countries=ED.countries.filter(c=>c.provs.length);
+  ED.countries.forEach(c=>{if(c.capital!=null&&ED.own[c.capital]!==c.id)c.capital=null});
+}
+function edDel(id){
+  P.forEach((p,pid)=>{if(ED.own[pid]===id){ED.own[pid]=-1;delete ED.yard[pid];delete ED.fac[pid]}});
+  ED.countries=ED.countries.filter(c=>c.id!==id);
+  if(ED.detail===id)ED.detail=null;
+  reindex();renderEditor();
+}
+function edExport(){
+  const d={v:2,plus:PLUS,countries:ED.countries.map(c=>({
+    name:c.name,hue:c.hue,provs:c.provs,econ:c.econ,start:c.start,aggr:c.aggr,capital:c.capital,
+    yards:c.provs.filter(pid=>ED.yard[pid]),facs:c.provs.filter(pid=>ED.fac[pid])
+  }))};
+  document.getElementById('edt').value=JSON.stringify(d);
+  document.getElementById('edmsg').textContent='Сценарий в поле ниже. Скопируй его.';
+}
+function edImport(){edLoadText(document.getElementById('edt').value)}
+function edLoadText(text){
+  try{
+    const d=JSON.parse(text);
+    if(d.plus!==PLUS)return edMsg('Сценарий сделан для другой карты (Провинции+ не совпадает).');
+    ED.own=P.map(()=>-1);ED.yard={};ED.fac={};ED.countries=[];ED.nextId=1;
+    d.countries.forEach(c=>{
+      const id=ED.nextId++;
+      ED.countries.push({id,name:c.name,hue:c.hue,provs:[],econ:c.econ||3,start:c.start??2,aggr:c.aggr??10,capital:c.capital??null});
+      c.provs.forEach(pid=>{if(P[pid])ED.own[pid]=id});
+      (c.yards||[]).forEach(pid=>{if(P[pid])ED.yard[pid]=true});
+      (c.facs||[]).forEach(pid=>{if(P[pid])ED.fac[pid]=true});
+    });
+    reindex();
+    edMsg(`Загружено стран: ${ED.countries.length}.`);
+  }catch(e){edMsg('Не удалось прочитать сценарий: '+errText(e))}
+}
+
 /* ---------- bots and the navy ---------- */
 // a bot land landing: the same 5 elite as the player's, same cooldowns, aggressive countries only
 function botLand(c,z){
@@ -1294,6 +1476,7 @@ function endTurnCore(){
       else{S.G[q.c]+=SHIPS[q.t].cost;L(`Корабль не смог встать в «${SEAZ[q.zid].name}»: деньги возвращены.`)}
       return false;
     });
+    if(INFMONEY&&!S.spec)S.G[S.pl]=Math.max(S.G[S.pl],99999);
     expireTruces();
     if(S.t===PEACE){
       CK.forEach(c=>{if(S.act[c]&&!S.out[c]&&c!==S.pl)S.mob[c]=true});
