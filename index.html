@@ -2,6 +2,7 @@
 <html lang="ru"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Америка, 1864: альянсы</title>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.js"></script>
 <link href="https://fonts.googleapis.com/css2?family=Spectral:wght@600;800&family=Public+Sans:wght@400;600&display=swap" rel="stylesheet">
 <style>
 :root{--sea:#0b1822;--pn:#14293a;--ink:#e6edf1;--mut:#8da3b2;--gold:#f0c35a;--red:#ff7b72;color-scheme:dark;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
@@ -1052,12 +1053,12 @@ function reportSize(){
 // a room is one document: rooms/<code> with settings, host, status and slots (country -> player id)
 const LB={active:false,room:null,data:null,list:null,msg:'',code:'',f:{}};
 let DB=null,ME=null;
-(async()=>{
-  try{
-    const c=window.claude;if(!c||!c.use)return;
-    DB=await c.use('db');
-    const u=await c.use('user');ME=u?await u.id():null;
-  }catch(e){DB=null}
+(function initSB(){
+  const SB_URL='https://bfjshifpzmqvtsrxposo.supabase.co';
+  const SB_KEY='sb_publishable_zzO0uXr8ZNs_t1vwKPNmgg_9pGaPAPE';
+  try{ME=localStorage.getItem('americas-pid')}catch(e){}
+  if(!ME){ME='p'+Math.random().toString(36).slice(2,10);try{localStorage.setItem('americas-pid',ME)}catch(e){}}
+  try{DB=window.supabase.createClient(SB_URL,SB_KEY)}catch(e){DB=null}
   if(LB.active)renderLobby();
 })();
 const errText=e=>{const c=(e&&(e.code||e.name))||'';const m=(e&&e.message)||String(e);return `${c} ${m}`.trim()};
@@ -1104,40 +1105,41 @@ function renderRoom(ov){
   h+=`<div class="row"><button class="g" onclick="lbRefresh()">Обновить</button><button class="g" onclick="LB.room=null;LB.data=null;LB.msg='';renderLobby()">Выйти из комнаты</button></div>`;
   ov.innerHTML=h;
 }
+const roomRow=r=>({code:r.code,host:r.host,public:r.is_public,status:r.status,SCEN:r.scen,PLUS:r.plus,ZERO:r.zero,FFA:r.ffa,slots:r.slots||{}});
 async function lbRefresh(){
   if(!DB||!LB.room)return renderLobby();
-  try{
-    const r=await DB.collection('rooms').doc(LB.room).get();
-    LB.data=r.exists?r.data():null;
-    if(!LB.data){LB.room=null;LB.msg='Комната не найдена.'}
-  }catch(e){LB.msg='Не удалось получить комнату: попробуй ещё раз.'}
+  const {data,error}=await DB.from('rooms').select('*').eq('code',LB.room).maybeSingle();
+  if(error)LB.msg='Ошибка: '+error.message;
+  else if(!data){LB.room=null;LB.msg='Комната не найдена.'}
+  else LB.data=roomRow(data);
   renderLobby();
 }
+
 async function lbCreate(pub){
-  if(!DB||!ME)return lbMsg('Нет связи с хранилищем или не определён твой id.');
+  if(!DB)return lbMsg('Нет связи с сервером.');
   const code=randCode();
-  const room={host:ME,public:pub,status:'lobby',SCEN,PLUS,ZERO,FFA,created:Date.now(),slots:{}};
-  try{await DB.collection('rooms').doc(code).set(room)}catch(e){return lbMsg('Ошибка хранилища: '+errText(e))}
+  const {error}=await DB.from('rooms').insert({code,host:ME,is_public:pub,status:'lobby',scen:SCEN,plus:PLUS,zero:ZERO,ffa:FFA});
+  if(error)return lbMsg('Ошибка: '+error.message);
   LB.room=code;LB.msg='';await lbRefresh();
 }
+
 async function lbList(){
-  if(!DB)return lbMsg('Нет связи с хранилищем.');
-  try{
-    let q=DB.collection('rooms').where('public','==',true);
-    Object.keys(LB.f).forEach(k=>{if(LB.f[k]!==undefined)q=q.where(k,'==',LB.f[k])});
-    const sn=await q.limit(50).get();
-    LB.list=sn.docs.filter(x=>x.exists).map(x=>({id:x.id,...x.data()}));
-    LB.msg='';
-  }catch(e){LB.msg='Список не загрузился.'}
-  renderLobby();
+  if(!DB)return lbMsg('Нет связи с сервером.');
+  const map={PLUS:'plus',ZERO:'zero',FFA:'ffa',SCEN:'scen'};
+  let q=DB.from('rooms').select('*').eq('is_public',true).limit(50);
+  Object.keys(LB.f).forEach(k=>{if(LB.f[k]!==undefined)q=q.eq(map[k],LB.f[k])});
+  const {data,error}=await q;
+  if(error)return lbMsg('Ошибка: '+error.message);
+  LB.list=(data||[]).map(roomRow);LB.msg='';renderLobby();
 }
+
 async function lbRandom(){
-  if(!DB)return lbMsg('Нет связи с хранилищем.');
-  const sn=await DB.collection('rooms').where('public','==',true).where('status','==','lobby').limit(50).get();
-  const arr=sn.docs.filter(x=>x.exists);
-  if(!arr.length)return lbCreate(true);
-  LB.room=arr[Math.random()*arr.length|0].id;LB.msg='';await lbRefresh();
+  if(!DB)return lbMsg('Нет связи с сервером.');
+  const {data}=await DB.from('rooms').select('code').eq('is_public',true).eq('status','lobby').limit(50);
+  if(!data||!data.length)return lbCreate(true);
+  LB.room=data[Math.random()*data.length|0].code;LB.msg='';await lbRefresh();
 }
+
 async function lbJoin(){
   const code=((document.getElementById('code')||{}).value||'').trim().toUpperCase();
   if(!code)return lbMsg('Введи код.');
@@ -1146,24 +1148,21 @@ async function lbJoin(){
 function lbOpen(id){LB.room=id;LB.msg='';lbRefresh()}
 // first come, first served: a short lease on the room, then the country must still be free
 async function lbClaim(c){
-  if(!DB||!ME||!LB.room)return lbMsg('Нет связи с хранилищем или не определён твой id.');
-  const ref=DB.collection('rooms').doc(LB.room);
-  let lease;
-  try{lease=await ref.acquire({holder:String(ME),ttlMs:3000})}catch(e){return lbMsg('Ошибка хранилища: '+errText(e))}
-  if(!lease.acquired)return lbMsg('Комната занята, попробуй ещё раз.');
-  const r=(await ref.get()).data()||{};
-  const slots=r.slots||{};
-  if(slots[c]&&slots[c]!==ME)return lbMsg(`${CN[c].n} уже занята.`);
-  const patch={};
-  Object.keys(slots).forEach(k=>{if(slots[k]===ME)patch[k]=null});
-  patch[c]=ME;
-  try{await ref.update({slots:patch})}catch(e){return lbMsg('Ошибка хранилища: '+errText(e))}
+  if(!DB||!LB.room)return lbMsg('Нет связи с сервером.');
+  const slots=(LB.data&&LB.data.slots)||{};
+  const mine=Object.keys(slots).find(k=>slots[k]===ME);
+  if(mine&&mine!==c)await DB.rpc('release_slot',{room_code:LB.room,country:mine,player:ME});
+  const {data,error}=await DB.rpc('claim_slot',{room_code:LB.room,country:c,player:ME});
+  if(error)return lbMsg('Ошибка: '+error.message);
+  if(!data)return lbMsg(`${CN[c].n} уже занята.`);
   LB.msg='';await lbRefresh();
 }
+
 // the host starts the game locally with the room's settings; free countries become bots
 async function lbStart(){
   const d=LB.data;if(!d||d.host!==ME)return;
-  await DB.collection('rooms').doc(LB.room).update({status:'playing'});
+  const {error}=await DB.from('rooms').update({status:'playing'}).eq('code',LB.room);
+  if(error)return lbMsg('Ошибка: '+error.message);
   const slots=d.slots||{};
   const mine=Object.keys(slots).find(k=>slots[k]===ME);
   SCEN=d.SCEN;PLUS=d.PLUS;ZERO=d.ZERO;FFA=d.FFA;
@@ -1174,6 +1173,7 @@ async function lbStart(){
   $('#ov').style.display='none';
   begin();
 }
+
 /* ---------- map editor: countries built from the existing provinces ---------- */
 // ED.tool: 'yard' | 'fac' | 'del' applies to the next tapped province; ED.capFor: country whose capital is being picked
 const ED={sel:new Set(),own:null,countries:[],nextId:1,msg:'',tool:null,capFor:null,detail:null,yard:{},fac:{}};
