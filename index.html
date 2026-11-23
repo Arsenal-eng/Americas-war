@@ -603,6 +603,7 @@ const yardZones=p=>{
 // a zone is blocked for building when an enemy fleet sits in it
 const zBlocked=zid=>{const f=S.zf[zid];return !!f&&!isMy(f.c)&&rel(S.pl,f.c)==='war'};
 function buyShip(zid,t){
+  if(guestBlock())return;
   const sh=SHIPS[t];
   if(zBlocked(zid)){L('Зона заблокирована вражеским флотом.');render();return}
   if(S.G[S.pl]<sh.cost){L('Не хватает ресурсов.');render();return}
@@ -611,6 +612,7 @@ function buyShip(zid,t){
 }
 // the whole fleet moves one zone per turn; a fleet that just arrived waits until next turn
 function fleetMove(from,to){
+  if(guestBlock())return;
   const f=S.zf[from];
   if(!f||!isMy(f.c))return;
   if(S.fmv[from]===S.t){L('Флот уже двигался в этом ходу.');render();return}
@@ -632,6 +634,7 @@ function fleetMove(from,to){
 }
 // landing: 5 elite infantry from the sea zone onto an adjacent enemy province; destroyers every 3 turns, cruisers every 2
 function landing(zid,b){
+  if(guestBlock())return;
   sfx('land');
   const f=S.zf[zid];
   if(!f||!isMy(f.c))return;
@@ -1112,6 +1115,7 @@ function renderRoom(ov){
   let h=`<h1>Комната ${LB.room}</h1><div class="mut">${modeText(d)} · ${d.public?'публичная':'приватная'} · ${d.status==='lobby'?'ожидание':'игра идёт'}</div><div class="mut">${LB.msg}</div>`;
   h+=`<h2 style="margin-top:12px">Страны</h2><div class="gr">`+roomCountries(d).map(c=>{const o=slots[c];return `<button class="${o?'g':''}" onclick="lbClaim('${c}')">${CN[c].n}: ${o?(o===ME?'ты':'занята'):'свободна'}</button>`}).join('')+`</div>`;
   h+=`<div class="mut">Незанятые страны достанутся ботам.</div>`;
+  if(!isHost&&d.status==='playing')h+=`<div class="row"><button onclick="mpJoin()">Войти в партию</button></div>`;
   if(isHost&&d.status==='lobby')h+=`<div class="row"><button onclick="lbStart()">Начать игру</button></div>`;
   h+=`<div class="row"><button class="g" onclick="lbRefresh()">Обновить</button><button class="g" onclick="LB.room=null;LB.data=null;LB.msg='';renderLobby()">Выйти из комнаты</button></div>`;
   ov.innerHTML=h;
@@ -1183,6 +1187,8 @@ async function lbStart(){
   LB.active=false;
   $('#ov').style.display='none';
   begin();
+  MP={code:LB.room,host:true};
+  mpPublish();
 }
 
 /* ---------- map editor: countries built from the existing provinces ---------- */
@@ -1449,6 +1455,42 @@ function playAnthem(c){
   abcNotes(t).forEach(([f,d])=>{if(f>0)tone(f,d*0.9,'triangle',0.16,at);at+=d});
 }
 
+/* ---------- multiplayer step 1: the host publishes the game, guests watch it ---------- */
+let MP=null,mpPoll=null;
+function mpPublish(){
+  if(!MP||!MP.host||!DB)return;
+  DB.from('rooms').update({state:snapshot()}).eq('code',MP.code).then(()=>{});
+}
+function guestBlock(){
+  if(S&&S.mpGuest){L('Ты смотришь партию. Ходить пока может только основатель.');render();return true}
+  return false;
+}
+async function mpJoin(){
+  if(!DB||!LB.room)return;
+  const {data,error}=await DB.from('rooms').select('state,slots').eq('code',LB.room).maybeSingle();
+  if(error)return lbMsg('Ошибка: '+error.message);
+  if(!data||!data.state)return lbMsg('Партия ещё не готова, нажми «Обновить» через пару секунд.');
+  const mine=Object.keys(data.slots||{}).find(k=>data.slots[k]===ME);
+  MP={code:LB.room,host:false,last:-1};
+  LB.active=false;$('#ov').style.display='none';
+  restoreSnapshot(data.state);
+  S.pl=mine||'SPEC';S.spec=!mine;S.mpGuest=true;
+  MP.last=S.t;
+  if(mpPoll)clearInterval(mpPoll);
+  mpPoll=setInterval(mpPull,4000);
+  render();
+}
+async function mpPull(){
+  if(!MP||MP.host||!DB)return;
+  const {data}=await DB.from('rooms').select('state').eq('code',MP.code).maybeSingle();
+  if(!data||!data.state||data.state.t===MP.last)return;
+  const keepPl=S.pl,keepSpec=S.spec;
+  MP.last=data.state.t;
+  restoreSnapshot(data.state);
+  S.pl=keepPl;S.spec=keepSpec;S.mpGuest=true;
+  render();
+}
+
 /* ---------- bots and the navy ---------- */
 // a bot land landing: the same 5 elite as the player's, same cooldowns, aggressive countries only
 function botLand(c,z){
@@ -1600,10 +1642,11 @@ function endTurnCore(){
 
 function endTurn(){
   if(S.over)return;
+  if(S.mpGuest)return;
   if(S.pending.length){L('Сначала реши судьбу капитулировавшей страны.');render();return}
   if(S.events&&S.events.length){L('Сначала ответь на предложение союза.');render();return}
   if(S.plans.length){L('Сначала выполни («!») или очисти («X») приказы.');render();return}
-  try{endTurnCore();S.szHist=(S.szHist||[]).concat(JSON.stringify(snapshot()).length)}
+  try{endTurnCore();S.szHist=(S.szHist||[]).concat(JSON.stringify(snapshot()).length);mpPublish()}
   catch(e){L('Ошибка хода: '+e.message);console.error(e);render()}
 }
 
@@ -1653,6 +1696,7 @@ function execPlans(){
 /* ---------- player input ---------- */
 function pick(e){
   audio();
+  if(S&&S.mpGuest)return;
   if(!S||S.over||S.pending.length||(S.events&&S.events.length)||S.screen==='puppets'||S.screen==='victory'||S.screen==='diplo'||S.screen==='state')return;
   const r=$('#cv').getBoundingClientRect(),x=(e.clientX-r.left)*W/r.width,y=(e.clientY-r.top)*H/r.height;
   const gx=x/CS|0,gy=y/CS|0;
@@ -1684,6 +1728,7 @@ function setCnt(s,t,el){
 }
 function toggleMode(){S.mode=S.mode==='tgt'?'src':'tgt';S.grp=[];S.cnt={};render()}
 function rec(t){
+  if(guestBlock())return;
   const f=S.focus;
   if(f===null||!isMy(S.ctl[f])||S.over||!P[f].fac)return;
   const c=S.ctl[f];
@@ -1930,6 +1975,7 @@ function panel(){
   return h+logHTML();
 }
 function renderFab(){
+  if(S&&S.mpGuest){$('#fab').innerHTML='';return}
   const hasP=S.plans.length>0,blocked=S.over||S.pending.length;
   $('#fab').innerHTML=(S.starOn?`<button class="star" onclick="showVictory()" title="Миссия выполнена">★</button>`:'')+(hasP?`<button class="g" onclick="clearPlans()" title="Очистить все приказы">X</button>`:'')
     +`<div class="col">${hasP?`<button onclick="execPlans()" title="Отдать приказы">!</button>`:''}<button class="g" onclick="endTurn()" ${hasP||blocked?'disabled':''} title="Закончить ход">!!</button></div>`;
