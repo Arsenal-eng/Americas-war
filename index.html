@@ -1123,12 +1123,22 @@ function renderRoom(ov){
 const roomRow=r=>({code:r.code,host:r.host,public:r.is_public,status:r.status,SCEN:r.scen,PLUS:r.plus,ZERO:r.zero,FFA:r.ffa,slots:r.slots||{}});
 async function lbRefresh(){
   if(!DB||!LB.room)return renderLobby();
-  const {data,error}=await DB.from('rooms').select('*').eq('code',LB.room).maybeSingle();
-  if(error)LB.msg='Ошибка: '+error.message;
-  else if(!data){LB.room=null;LB.msg='Комната не найдена.'}
-  else LB.data=roomRow(data);
+  try{
+    const {data,error}=await DB.from('rooms').select('*').eq('code',LB.room).maybeSingle();
+    if(error)LB.msg='Ошибка: '+error.message;
+    else if(!data){LB.room=null;LB.msg='Комната не найдена.'}
+    else{
+      LB.data=roomRow(data);LB.data.queue=data.queue||[];
+      if(ME&&!LB.data.queue.includes(ME)){
+        const q=[...LB.data.queue,ME];
+        await DB.from('rooms').update({queue:q}).eq('code',LB.room);
+        LB.data.queue=q;
+      }
+    }
+  }catch(e){LB.msg='Не удалось получить комнату: попробуй ещё раз.'}
   renderLobby();
 }
+
 
 async function lbCreate(pub){
   if(!DB)return lbMsg('Нет связи с сервером.');
@@ -1176,7 +1186,8 @@ async function lbClaim(c){
 // the host starts the game locally with the room's settings; free countries become bots
 async function lbStart(){
   const d=LB.data;if(!d||d.host!==ME)return;
-  const {error}=await DB.from('rooms').update({status:'playing'}).eq('code',LB.room);
+  const queue=(d.queue||[]).includes(ME)?(d.queue||[]):[ME,...(d.queue||[])];
+  const {error}=await DB.from('rooms').update({status:'playing',queue,active:queue[0]||'bots',tn:1,deadline:Date.now()+TURN_MS,closed_by:null,missed:{}}).eq('code',LB.room);
   if(error)return lbMsg('Ошибка: '+error.message);
   const slots=d.slots||{};
   const mine=Object.keys(slots).find(k=>slots[k]===ME);
@@ -1187,10 +1198,12 @@ async function lbStart(){
   LB.active=false;
   $('#ov').style.display='none';
   begin();
-  MP={code:LB.room,host:true};
+  MP={code:LB.room,host:true,tn:1,queue,active:queue[0]||'bots',missed:{},deadline:Date.now()+TURN_MS,busy:false,lastActive:null};
   Object.keys(slots).forEach(k=>{if(slots[k]!==ME)S.manual[k]=true});
-  mpPublish();
+  await mpPublish();
+  startMpLoops();
 }
+
 
 /* ---------- map editor: countries built from the existing provinces ---------- */
 // ED.tool: 'yard' | 'fac' | 'del' applies to the next tapped province; ED.capFor: country whose capital is being picked
@@ -1458,29 +1471,26 @@ function playAnthem(c){
 
 /* ---------- multiplayer step 1: the host publishes the game, guests watch it ---------- */
 let MP=null,mpPoll=null;
-function mpPublish(){
-  if(!MP||!MP.host||!DB)return;
-  DB.from('rooms').update({state:snapshot()}).eq('code',MP.code).then(()=>{});
-}
+
 function guestBlock(){
   if(S&&S.mpGuest){L('Ты смотришь партию. Ходить пока может только основатель.');render();return true}
   return false;
 }
 async function mpJoin(){
   if(!DB||!LB.room)return;
-  const {data,error}=await DB.from('rooms').select('state,slots').eq('code',LB.room).maybeSingle();
+  const {data,error}=await DB.from('rooms').select('state,slots,queue,active,tn,deadline,missed').eq('code',LB.room).maybeSingle();
   if(error)return lbMsg('Ошибка: '+error.message);
   if(!data||!data.state)return lbMsg('Партия ещё не готова, нажми «Обновить» через пару секунд.');
   const mine=Object.keys(data.slots||{}).find(k=>data.slots[k]===ME);
-  MP={code:LB.room,host:false,last:-1};
+  MP={code:LB.room,host:false,tn:null,queue:data.queue||[],active:data.active,missed:data.missed||{},deadline:data.deadline||0,busy:false};
   LB.active=false;$('#ov').style.display='none';
   restoreSnapshot(data.state);
   S.pl=mine||'SPEC';S.spec=!mine;S.mpGuest=true;
-  MP.last=S.t;
-  if(mpPoll)clearInterval(mpPoll);
-  mpPoll=setInterval(mpPull,4000);
+  MP.tn=data.tn;
+  startMpLoops();
   render();
 }
+
 async function mpPull(){
   if(!MP||MP.host||!DB)return;
   const {data}=await DB.from('rooms').select('state').eq('code',MP.code).maybeSingle();
@@ -1498,12 +1508,7 @@ const capitulatesNow=c=>c==='PY'?armyCount(c)===0:lostOf(c)>=Math.ceil(P.filter(
 
 /* ---------- multiplayer step 2: guests send orders, the host applies them when the turn closes ---------- */
 // an order is stored as one row: room, turn, player, orders JSON
-async function sendOrder(o){
-  if(!DB||!MP)return;
-  const {error}=await DB.from('orders').insert({room:MP.code,turn:S.t,player:ME,o});
-  L(error?'Приказ не отправился: '+error.message:'Приказ отправлен основателю.');
-  render();
-}
+
 // the host checks that the order really comes from the owner of the country and applies it
 function applyOrder(o,country){
   if(o.k==='plan'){
@@ -1535,6 +1540,100 @@ async function collectOrders(){
 function addPlan(p){
   if(MP&&!MP.host){sendOrder(Object.assign({k:'plan'},p));return}
   S.plans.push(p);
+}
+
+/* ---------- multiplayer step 3: turn queue, 40-second turns, bots play a round after the players ---------- */
+const TURN_MS=40000;
+let MP_T=null,MP_F=null;
+const nextOf=(q,a)=>{if(a==='bots')return q[0]||'bots';const i=q.indexOf(a);return i+1<q.length?q[i+1]:'bots'};
+function mpPublish(){
+  if(!MP||!MP.host||!DB)return Promise.resolve();
+  return DB.from('rooms').update({state:snapshot()}).eq('code',MP.code);
+}
+async function mpRead(){
+  const {data}=await DB.from('rooms').select('queue,active,tn,deadline,closed_by,missed,slots,state').eq('code',MP.code).maybeSingle();
+  return data;
+}
+async function mpAdvance(tn,next,closedBy,queue,missed){
+  const dl=next==='bots'?Date.now():Date.now()+TURN_MS;
+  const {data,error}=await DB.from('rooms').update({tn:tn+1,active:next,deadline:dl,closed_by:closedBy,queue,missed}).eq('code',MP.code).eq('tn',tn).select('tn');
+  return !error&&!!(data&&data.length);
+}
+// a player's orders are applied by the host after the player ends the turn
+async function applyTurnOrders(tn,player){
+  const {data:rd}=await DB.from('rooms').select('slots').eq('code',MP.code).maybeSingle();
+  const slots=(rd&&rd.slots)||{};
+  const c=Object.keys(slots).find(k=>slots[k]===player);
+  const {data}=await DB.from('orders').select('o').eq('room',MP.code).eq('turn',tn).eq('player',player).order('id',{ascending:true});
+  if(c)(data||[]).forEach(r=>applyOrder(r.o,c));
+  if(S.plans.length)execPlans();
+  await DB.from('orders').delete().eq('room',MP.code).lte('turn',tn);
+}
+async function sendOrder(o){
+  if(!DB||!MP)return;
+  if(MP.active!==ME)return L('Сейчас ходит другой игрок.');
+  const {error}=await DB.from('orders').insert({room:MP.code,turn:MP.tn,player:ME,o});
+  L(error?'Приказ не отправился: '+error.message:'Приказ отправлен.');
+  render();
+}
+// the active player ends the turn: the next one in the queue starts, a player who is last hands over to the bots
+async function mpEndMyTurn(){
+  if(!MP||!DB||MP.active!==ME)return;
+  const missed=Object.assign({},MP.missed||{});missed[ME]=0;
+  if(MP.host){if(S.plans.length)execPlans();await mpPublish()}
+  await mpAdvance(MP.tn,nextOf(MP.queue,ME),'player',MP.queue,missed);
+}
+// host loop: applies the orders of a turn that a player closed, runs the bots, handles timeouts
+async function mpHostTick(){
+  if(!MP||!MP.host||!DB||MP.busy)return;
+  MP.busy=true;
+  try{
+    const d=await mpRead();
+    if(!d||!d.queue||!d.queue.length)return;
+    if(MP.tn!==d.tn){
+      if(MP.lastActive&&MP.lastActive!=='bots'&&d.closed_by==='player')await applyTurnOrders(MP.tn,MP.lastActive);
+      MP.tn=d.tn;MP.lastActive=d.active;
+      await mpPublish();
+    }
+    MP.active=d.active;MP.queue=d.queue;MP.missed=d.missed||{};MP.deadline=d.deadline;
+    if(d.active==='bots'){
+      endTurnCore();
+      await mpPublish();
+      await mpAdvance(d.tn,nextOf(d.queue,'bots'),'bots',d.queue,d.missed||{});
+    }else if(Date.now()>d.deadline){
+      const gone=d.active;
+      const missed=Object.assign({},d.missed||{});missed[gone]=(missed[gone]||0)+1;
+      let queue=d.queue;
+      if(missed[gone]>=2&&gone!==ME){
+        queue=queue.filter(x=>x!==gone);
+        const c=Object.keys(d.slots||{}).find(k=>d.slots[k]===gone);
+        if(c)S.manual[c]=false;
+        L(`${gone} пропустил два хода и заменён ботом.`);
+      }
+      if(gone===ME)S.plans=[];
+      await DB.from('orders').delete().eq('room',MP.code).eq('turn',d.tn);
+      await mpAdvance(d.tn,nextOf(d.queue,gone),'timeout',queue,missed);
+      await mpPublish();
+    }
+  }finally{MP.busy=false}
+}
+// guest loop: follows the room, restores the map when a turn was closed
+async function mpGuestTick(){
+  if(!MP||MP.host||!DB)return;
+  const d=await mpRead();
+  if(!d)return;
+  MP.active=d.active;MP.queue=d.queue;MP.missed=d.missed||{};MP.deadline=d.deadline;
+  if(MP.tn!==d.tn){
+    MP.tn=d.tn;
+    if(d.state){const keepPl=S.pl,keepSpec=S.spec;SELPL=keepPl;restoreSnapshot(d.state);S.pl=keepPl;S.spec=keepSpec;S.mpGuest=true}
+  }
+  renderFab();
+}
+function startMpLoops(){
+  if(MP_T)clearInterval(MP_T);
+  if(MP_F)clearInterval(MP_F);
+  MP_T=setInterval(()=>{if(MP&&MP.host)mpHostTick();else if(MP)mpGuestTick()},2000);
+  MP_F=setInterval(()=>{if(MP&&MP.active)renderFab()},1000);
 }
 
 /* ---------- bots and the navy ---------- */
@@ -1687,11 +1786,11 @@ function endTurnCore(){
 }
 
 async function endTurn(){
+  if(MP){mpEndMyTurn();return}
   if(S.over)return;
   if(S.pending.length){L('Сначала реши судьбу капитулировавшей страны.');render();return}
   if(S.events&&S.events.length){L('Сначала ответь на предложение союза.');render();return}
   if(S.plans.length){L('Сначала выполни («!») или очисти («X») приказы.');render();return}
-  await collectOrders();
   try{endTurnCore();S.szHist=(S.szHist||[]).concat(JSON.stringify(snapshot()).length);mpPublish()}
   catch(e){L('Ошибка хода: '+e.message);console.error(e);render()}
 }
@@ -2020,11 +2119,18 @@ function panel(){
   return h+logHTML();
 }
 function renderFab(){
-  if(S&&S.mpGuest){$('#fab').innerHTML='';return}
   const hasP=S.plans.length>0,blocked=S.over||S.pending.length;
-  $('#fab').innerHTML=(S.starOn?`<button class="star" onclick="showVictory()" title="Миссия выполнена">★</button>`:'')+(hasP?`<button class="g" onclick="clearPlans()" title="Очистить все приказы">X</button>`:'')
-    +`<div class="col">${hasP?`<button onclick="execPlans()" title="Отдать приказы">!</button>`:''}<button class="g" onclick="endTurn()" ${hasP||blocked?'disabled':''} title="Закончить ход">!!</button></div>`;
+  const myTurn=!MP||MP.active===ME;
+  let timer='';
+  if(MP&&MP.active&&MP.active!=='bots'){
+    const left=Math.max(0,Math.ceil(((MP.deadline||0)-Date.now())/1000));
+    timer=`<div class="mut">${MP.active===ME?'твой ход':'ход: '+MP.active} · ${left}с</div>`;
+  }
+  $('#fab').innerHTML=timer
+    +(hasP&&myTurn?`<button class="g" onclick="clearPlans()" title="Очистить приказы">X</button>`:'')
+    +`<div class="col">${hasP&&myTurn?`<button onclick="execPlans()" title="Отдать приказы">!</button>`:''}${myTurn?`<button class="g" onclick="endTurn()" ${blocked?'disabled':''} title="Закончить ход">!!</button>`:''}</div>`;
 }
+
 function render(){
   if(!S)return;
   S.plans=S.plans.filter(q=>isMy(S.ctl[q.a])&&P[q.a].adj.includes(q.b));
