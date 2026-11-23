@@ -603,7 +603,7 @@ const yardZones=p=>{
 // a zone is blocked for building when an enemy fleet sits in it
 const zBlocked=zid=>{const f=S.zf[zid];return !!f&&!isMy(f.c)&&rel(S.pl,f.c)==='war'};
 function buyShip(zid,t){
-  if(guestBlock())return;
+  if(MP&&!MP.host){sendOrder({k:'buy',zid,t});return}
   const sh=SHIPS[t];
   if(zBlocked(zid)){L('Зона заблокирована вражеским флотом.');render();return}
   if(S.G[S.pl]<sh.cost){L('Не хватает ресурсов.');render();return}
@@ -612,7 +612,7 @@ function buyShip(zid,t){
 }
 // the whole fleet moves one zone per turn; a fleet that just arrived waits until next turn
 function fleetMove(from,to){
-  if(guestBlock())return;
+  if(MP&&!MP.host){sendOrder({k:'fleet',from,to});return}
   const f=S.zf[from];
   if(!f||!isMy(f.c))return;
   if(S.fmv[from]===S.t){L('Флот уже двигался в этом ходу.');render();return}
@@ -634,7 +634,7 @@ function fleetMove(from,to){
 }
 // landing: 5 elite infantry from the sea zone onto an adjacent enemy province; destroyers every 3 turns, cruisers every 2
 function landing(zid,b){
-  if(guestBlock())return;
+  if(MP&&!MP.host){sendOrder({k:'land',zid,b});return}
   sfx('land');
   const f=S.zf[zid];
   if(!f||!isMy(f.c))return;
@@ -828,7 +828,7 @@ function check(){
   trackContact();
   CK.forEach(c=>{
     if(!S.act[c]||S.out[c]||S.master[c]!==undefined||S.libd[c])return;
-    if(lostOf(c)>=Math.ceil(P.filter(p=>p.c===c).length/2))capitulate(c);
+    if(capitulatesNow(c))capitulate(c);
   });
   applyRenames();
   if(S.spec){}
@@ -922,8 +922,8 @@ const IDEO={
  liberalism:{name:'Либерализм',dip:10,rebel:1.3,inc:1.05,desc:'дипломатия +10%, восстания ×1,3, доход +5%'},
  conservatism:{name:'Консерватизм',dip:-5,rebel:0.5,cost:1.05,desc:'дипломатия −5%, восстания ×0,5, войска дороже на 5%'},
  democracy:{name:'Демократия',dip:5,rebel:0.7,desc:'дипломатия +5%, восстания ×0,7'},
- socialism:{name:'Социализм',cost:0.9,inc:0.95,desc:'войска дешевле на 10%, доход −5%'},
- nationalism:{name:'Национализм',atk:1.1,dip:-15,desc:'атака твоих дивизий ×1,1, дипломатия −15%'}
+ socialism:{name:'Социализм',cost:0.9,inc:0.95,morale:0.8,desc:'войска дешевле на 10%, доход −5%, боевой дух: капитулирует только после потери 80% провинций'},
+ nationalism:{name:'Национализм',atk:1.1,dip:-15,morale:0.8,desc:'атака твоих дивизий ×1,1, дипломатия −15%, боевой дух: капитулирует только после потери 80% провинций'}
 };
 const econOf=c=>(S.econ&&S.econ[c])||'mixed';
 const ideoV=(c,k,def)=>{const id=S.ideo&&S.ideo[c];if(!id)return def;const v=IDEO[id][k];return v===undefined?def:v};
@@ -1188,6 +1188,7 @@ async function lbStart(){
   $('#ov').style.display='none';
   begin();
   MP={code:LB.room,host:true};
+  Object.keys(slots).forEach(k=>{if(slots[k]!==ME)S.manual[k]=true});
   mpPublish();
 }
 
@@ -1491,6 +1492,51 @@ async function mpPull(){
   render();
 }
 
+// Paraguay does not surrender for lost provinces: it surrenders only when its army is destroyed completely
+const armyCount=c=>P.reduce((x,p)=>x+(S.ctl[p.id]===c?tot(S.u[p.id])+tot(S.q[p.id]):0),0);
+const capitulatesNow=c=>c==='PY'?armyCount(c)===0:lostOf(c)>=Math.ceil(P.filter(p=>p.c===c).length*ideoV(c,'morale',0.5));
+
+/* ---------- multiplayer step 2: guests send orders, the host applies them when the turn closes ---------- */
+// an order is stored as one row: room, turn, player, orders JSON
+async function sendOrder(o){
+  if(!DB||!MP)return;
+  const {error}=await DB.from('orders').insert({room:MP.code,turn:S.t,player:ME,o});
+  L(error?'Приказ не отправился: '+error.message:'Приказ отправлен основателю.');
+  render();
+}
+// the host checks that the order really comes from the owner of the country and applies it
+function applyOrder(o,country){
+  if(o.k==='plan'){
+    if(S.ctl[o.a]===country&&P[o.a].adj.includes(o.b))S.plans.push({t:o.t,a:o.a,b:o.b,v:o.v});
+  }else if(o.k==='rec'){
+    if(S.ctl[o.f]!==country||S.G[country]<costOf(country,o.t)||free(o.f)<=0)return;
+    S.G[country]-=costOf(country,o.t);S.q[o.f][o.t]++;
+  }else if(o.k==='buy'){
+    if(zBlocked(o.zid)||S.G[country]<SHIPS[o.t].cost)return;
+    if(!P.some(p=>p.yard&&S.ctl[p.id]===country&&yardZones(p).includes(o.zid)))return;
+    S.G[country]-=SHIPS[o.t].cost;S.shipQ.push({zid:o.zid,c:country,t:o.t,arrive:S.t+2});
+  }else if(o.k==='land'){
+    if(S.zf[o.zid]&&S.zf[o.zid].c===country)landing(o.zid,o.b);
+  }else if(o.k==='fleet'){
+    if(S.zf[o.from]&&S.zf[o.from].c===country)fleetMove(o.from,o.to);
+  }
+}
+// called by the host when the turn closes: takes every order of this turn and runs it
+async function collectOrders(){
+  if(!MP||!MP.host||!DB)return;
+  const {data:rd}=await DB.from('rooms').select('slots').eq('code',MP.code).maybeSingle();
+  const slots=(rd&&rd.slots)||{};
+  const {data}=await DB.from('orders').select('player,o').eq('room',MP.code).eq('turn',S.t).order('id',{ascending:true});
+  (data||[]).forEach(r=>{const c=Object.keys(slots).find(k=>slots[k]===r.player);if(c)applyOrder(r.o,c)});
+  if(S.plans.length)execPlans();
+  if(data&&data.length)await DB.from('orders').delete().eq('room',MP.code).lte('turn',S.t);
+}
+// guests do not keep plans locally: they go to the host
+function addPlan(p){
+  if(MP&&!MP.host){sendOrder(Object.assign({k:'plan'},p));return}
+  S.plans.push(p);
+}
+
 /* ---------- bots and the navy ---------- */
 // a bot land landing: the same 5 elite as the player's, same cooldowns, aggressive countries only
 function botLand(c,z){
@@ -1640,12 +1686,12 @@ function endTurnCore(){
   render();
 }
 
-function endTurn(){
+async function endTurn(){
   if(S.over)return;
-  if(S.mpGuest)return;
   if(S.pending.length){L('Сначала реши судьбу капитулировавшей страны.');render();return}
   if(S.events&&S.events.length){L('Сначала ответь на предложение союза.');render();return}
   if(S.plans.length){L('Сначала выполни («!») или очисти («X») приказы.');render();return}
+  await collectOrders();
   try{endTurnCore();S.szHist=(S.szHist||[]).concat(JSON.stringify(snapshot()).length);mpPublish()}
   catch(e){L('Ошибка хода: '+e.message);console.error(e);render()}
 }
@@ -1663,7 +1709,7 @@ function makePlans(b){
     let v=(S.cnt[a]||av).map((x,t)=>Math.max(0,Math.min(x,av[t])));
     if(hostile){v=clampRoom(v,room);room-=tot(v)}
     if(!tot(v))return;
-    S.plans.push({t:hostile?'a':'m',a,b,v});made++;
+    addPlan({t:hostile?'a':'m',a,b,v});made++;
   });
   if(!made)L('Нет войск для приказа.');
   S.grp=[];S.cnt={};
@@ -1696,7 +1742,6 @@ function execPlans(){
 /* ---------- player input ---------- */
 function pick(e){
   audio();
-  if(S&&S.mpGuest)return;
   if(!S||S.over||S.pending.length||(S.events&&S.events.length)||S.screen==='puppets'||S.screen==='victory'||S.screen==='diplo'||S.screen==='state')return;
   const r=$('#cv').getBoundingClientRect(),x=(e.clientX-r.left)*W/r.width,y=(e.clientY-r.top)*H/r.height;
   const gx=x/CS|0,gy=y/CS|0;
@@ -1728,7 +1773,7 @@ function setCnt(s,t,el){
 }
 function toggleMode(){S.mode=S.mode==='tgt'?'src':'tgt';S.grp=[];S.cnt={};render()}
 function rec(t){
-  if(guestBlock())return;
+  if(MP&&!MP.host){sendOrder({k:'rec',f:S.focus,t});return}
   const f=S.focus;
   if(f===null||!isMy(S.ctl[f])||S.over||!P[f].fac)return;
   const c=S.ctl[f];
@@ -1928,7 +1973,7 @@ function victoryHTML(){
 
 /* ---------- panel ---------- */
 function logHTML(){
-  const st=CK.filter(c=>S.act[c]).map(c=>`${CN[c].n}: ${S.out[c]&&S.master[c]===undefined?'сдалась':S.master[c]!==undefined?'марионетка':lostOf(c)+'/'+Math.ceil(P.filter(p=>p.c===c).length/2)}`).join('; ');
+  const st=CK.filter(c=>S.act[c]).map(c=>`${CN[c].n}: ${S.out[c]&&S.master[c]===undefined?'сдалась':S.master[c]!==undefined?'марионетка':(c==='PY'?'армия '+armyCount(c):lostOf(c)+'/'+Math.ceil(P.filter(p=>p.c===c).length*ideoV(c,'morale',0.5)))}`).join('; ');
   return `<div class="lg">${S.spec?'':`<div>Население ${POP[S.pl]} тыс., мобилизовано ${Math.round(mobPct(S.pl))}%</div>`}<div>${st}</div></div><div class="lg">${S.log.slice(0,3).map(x=>`<div>${x}</div>`).join('')}</div>`;
 }
 function panel(){
