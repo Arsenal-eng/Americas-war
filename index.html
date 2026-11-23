@@ -1191,7 +1191,7 @@ async function lbStart(){
   if(error)return lbMsg('Ошибка: '+error.message);
   const slots=d.slots||{};
   const mine=Object.keys(slots).find(k=>slots[k]===ME);
-  SCEN=d.SCEN;PLUS=d.PLUS;ZERO=d.ZERO;FFA=d.FFA;
+  SCEN=d.SCEN;PLUS=d.PLUS;ZERO=d.ZERO;FFA=true;
   rebuildAll();
   SEL={};CKV().forEach(c=>{SEL[c]=0});
   SELPL=mine||'SPEC';
