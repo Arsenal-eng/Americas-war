@@ -75,7 +75,7 @@ const R=[
 ["UK",14,"-125,49 -95,49 -89,48 -83,46 -79,43 -75,45 -67,45 -60,47 -55,50 -60,56 -66,60 -75,62 -125,62","Канада"]];
 
 const cell=new Int16Array(GW*GH).fill(-1),P=[];
-const PEACE=10;
+let PEACE=10;
 let FFA=false;
 let PLUS=false;
 let BOTDECIDE=false;
@@ -972,7 +972,7 @@ function proposeAlliance(c){
 }
 // bots: aggressive ones pick wars with neighbours, calm ones look for allies among their peaceful neighbours
 function botDiplo(c){
-  if(!S.zero)return;
+  if(!S.zero||S.mpNeutral)return;
   const agg=aggOf(c);
   const nb=[...new Set(P.filter(p=>S.ctl[p.id]===c).flatMap(p=>p.adj.map(b=>S.ctl[b])))]
     .filter(x=>x!==null&&x!==c&&CK.includes(x)&&S.act[x]&&!S.out[x]&&S.master[x]===undefined);
@@ -1024,10 +1024,10 @@ function betrayals(){
 
 /* ---------- stage 1: save and restore the whole game as one JSON document ---------- */
 // the map geometry is rebuilt from the settings, so only the state is stored
-const SNAP_KEYS=['t','pl','team','act','out','G','master','share','manual','mobN','mobOut','kills','caps','touch','libd','rep','rel','truceEnd','cool','econ','econT','ideo','ideoN','ideoT','zf','shipQ','landT','fmv','fsel','prevNear','won','starOn','wasWar','zero','spec','reqTurn','dAmt','dReq','dMonths','mob','log','events','mode'];
+const SNAP_KEYS=['mpNeutral','t','pl','team','act','out','G','master','share','manual','mobN','mobOut','kills','caps','touch','libd','rep','rel','truceEnd','cool','econ','econT','ideo','ideoN','ideoT','zf','shipQ','landT','fmv','fsel','prevNear','won','starOn','wasWar','zero','spec','reqTurn','dAmt','dReq','dMonths','mob','log','events','mode'];
 const SNAP_ARRAYS=['ctl','u','q','annex','from','reb'];
 function snapshot(){
-  const d={v:1,settings:{SCEN,PLUS,FFA,ZERO,NOCLIP,BOTDECIDE,SEL,SELPL}};
+  const d={v:1,settings:{SCEN,PLUS,FFA,ZERO,NOCLIP,BOTDECIDE,SEL,SELPL,peace:PEACE}};
   SNAP_KEYS.forEach(k=>{d[k]=S[k]});
   SNAP_ARRAYS.forEach(k=>{d[k]=S[k]});
   return d;
@@ -1035,6 +1035,7 @@ function snapshot(){
 function restoreSnapshot(d){
   SCEN=d.settings.SCEN;PLUS=d.settings.PLUS;FFA=d.settings.FFA;ZERO=d.settings.ZERO;
   NOCLIP=d.settings.NOCLIP;BOTDECIDE=d.settings.BOTDECIDE;SEL=d.settings.SEL;SELPL=d.settings.SELPL;
+  PEACE=d.settings.peace||10;
   rebuildAll();
   begin();
   SNAP_KEYS.forEach(k=>{if(d[k]!==undefined)S[k]=d[k]});
@@ -1191,13 +1192,14 @@ async function lbStart(){
   if(error)return lbMsg('Ошибка: '+error.message);
   const slots=d.slots||{};
   const mine=Object.keys(slots).find(k=>slots[k]===ME);
-  SCEN=d.SCEN;PLUS=d.PLUS;ZERO=d.ZERO;FFA=true;
+  SCEN=d.SCEN;PLUS=d.PLUS;ZERO=true;FFA=true;PEACE=4;
   rebuildAll();
   SEL={};CKV().forEach(c=>{SEL[c]=0});
   SELPL=mine||'SPEC';
   LB.active=false;
   $('#ov').style.display='none';
   begin();
+  S.mpNeutral=true;
   MP={code:LB.room,host:true,tn:1,queue,active:queue[0]||'bots',missed:{},deadline:Date.now()+TURN_MS,busy:false,lastActive:null};
   Object.keys(slots).forEach(k=>{if(slots[k]!==ME)S.manual[k]=true});
   await mpPublish();
