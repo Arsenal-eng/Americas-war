@@ -72,7 +72,9 @@ const R=[
 ["CM",4,"-92,15 -91,17 -88,18 -84,15 -83,11 -77,9 -78,7 -81,8 -86,11 -91,13"],
 ["MX",11,"-117,32 -111,31 -106,32 -104,29 -100,29 -97,26 -97,22 -95,19 -91,19 -90,21 -87,21 -88,18 -91,17 -92,15 -95,16 -100,17 -105,20 -106,24 -110,27 -115,30"],
 ["US",16,"-125,49 -95,49 -89,48 -83,46 -79,43 -75,45 -67,45 -70,41 -76,37 -81,32 -80,26 -83,29 -90,30 -97,26 -100,29 -104,29 -106,32 -111,31 -117,32 -121,35 -124,40"],
-["UK",14,"-125,49 -95,49 -89,48 -83,46 -79,43 -75,45 -67,45 -60,47 -55,50 -60,56 -66,60 -75,62 -125,62","Канада"]];
+["UK",14,"-125,49 -95,49 -89,48 -83,46 -79,43 -75,45 -67,45 -60,47 -55,50 -60,56 -66,60 -75,62 -125,62","Канада"],
+["UK",1,"-59.2,-51.2 -57.8,-51.8 -58.2,-52.3 -59.8,-52.0 -59.3,-51.5","Фолкленды"],
+["UK",1,"-61.3,-51.3 -60.6,-51.2 -60.2,-51.8 -60.9,-52.2 -61.5,-51.8","Фолкленды"]];
 
 const cell=new Int16Array(GW*GH).fill(-1),P=[];
 let PEACE=10;
@@ -203,6 +205,7 @@ function declareWar(c){
   L(`Ты объявил войну: ${CN[c].n}.`);render();
 }
 function proposePeace(c){
+  if(isHumanTarget(c)){dipRequest('peace',c,0);return}
   if(!dipGate(c,true))return;
   const pct=chanceOf(teamPow(S.team[S.pl]),teamPow(S.team[c]));
   if(roll(pct)){S.rel[pairKey(S.pl,c)]='peace';delete S.truceEnd[pairKey(S.pl,c)];L(`${CN[c].n} подписала мир с тобой.`)}
@@ -210,6 +213,7 @@ function proposePeace(c){
   render();
 }
 function proposeTruce(c){
+  if(isHumanTarget(c)){dipRequest('truce',c,S.dMonths);return}
   if(!dipGate(c,true))return;
   const pct=chanceOf(teamPow(S.team[S.pl]),teamPow(S.team[c])),m=S.dMonths;
   if(roll(pct)){const k=pairKey(S.pl,c);S.rel[k]='truce';S.truceEnd[k]=S.t+m;L(`${CN[c].n} согласилась на перемирие на ${m} мес.`)}
@@ -292,12 +296,12 @@ function diploDetail(c){
   }else if(r==='war'){
     const solo=!CK.some(x=>x!==S.pl&&S.act[x]&&!S.out[x]&&S.master[x]===undefined&&S.team[x]===S.team[S.pl]);
     if(solo){
-      h+=`<div class="mut">Шанс мира: ${chanceOf(teamPow(S.team[S.pl]),teamPow(S.team[c]))}%.</div><div class="row"><button onclick="proposePeace('${c}')">Предложить мир</button></div>`;
+      h+=`<div class="mut">${isHumanTarget(c)?'Предложение уйдёт игроку, он ответит сам.':'Шанс мира: '+chanceOf(teamPow(S.team[S.pl]),teamPow(S.team[c]))+'%.'}</div><div class="row"><button onclick="proposePeace('${c}')">Предложить мир</button></div>`;
     }else{
-      h+=`<div class="row"><span>Перемирие на <b>${S.dMonths}</b> мес. (от 3 до 7)</span><input type="range" min="3" max="7" value="${S.dMonths}" onchange="setD('dMonths',this.value)"></div><div class="mut">Шанс перемирия: ${chanceOf(teamPow(S.team[S.pl]),teamPow(S.team[c]))}%.</div><div class="row"><button onclick="proposeTruce('${c}')">Предложить перемирие</button></div>`;
+      h+=`<div class="row"><span>Перемирие на <b>${S.dMonths}</b> мес. (от 3 до 7)</span><input type="range" min="3" max="7" value="${S.dMonths}" onchange="setD('dMonths',this.value)"></div><div class="mut">${isHumanTarget(c)?'Предложение уйдёт игроку, он ответит сам.':'Шанс перемирия: '+chanceOf(teamPow(S.team[S.pl]),teamPow(S.team[c]))+'%.'}</div><div class="row"><button onclick="proposeTruce('${c}')">Предложить перемирие</button></div>`;
     }
   }else if(r==='truce'){
-    h+=`<div class="mut">Шанс мира: ${chanceOf(teamPow(S.team[S.pl]),teamPow(S.team[c]))}%.</div><div class="row"><button onclick="proposePeace('${c}')">Заключить мир</button></div>`;
+    h+=`<div class="mut">${isHumanTarget(c)?'Предложение уйдёт игроку, он ответит сам.':'Шанс мира: '+chanceOf(teamPow(S.team[S.pl]),teamPow(S.team[c]))+'%.'}</div><div class="row"><button onclick="proposePeace('${c}')">Заключить мир</button></div>`;
   }else if(r==='peace'){
     h+=`<div class="mut">Вы в мире.</div><div class="row"><button onclick="proposeAlliance('${c}')">Предложить союз</button><button class="g" onclick="declareWar('${c}')">Объявить войну</button></div>`;
   }
@@ -316,6 +320,7 @@ function diploHTML(){
 /* ---------- province names, partisans, previews ---------- */
 CN.PART={n:"Партизаны",k:0,p:0,g:0};
 const CITY={
+FK:[["Стэнли",-57.85,-51.7]],
 EC:[["Кито",-78.5,-0.2],["Гуаякиль",-79.9,-2.2],["Куэнка",-79.0,-2.9],["Машала",-79.96,-3.26],["Амбато",-78.6,-1.24]],
 CO:[["Богота",-74.07,4.71],["Медельин",-75.57,6.25],["Кали",-76.52,3.45],["Барранкилья",-74.8,10.96],["Картахена",-75.5,10.39],["Кукута",-72.5,7.9],["Букараманга",-73.12,7.12],["Перейра",-75.7,4.81],["Санта-Марта",-74.2,11.24],["Виллависенсио",-73.62,4.14]],
 VE:[["Каракас",-66.9,10.5],["Маракайбо",-71.6,10.65],["Валенсия",-68.0,10.16],["Барквисимето",-69.3,10.07],["Сьюдад-Гуаяна",-62.7,8.35],["Матурин",-63.2,9.75],["Мерида",-71.15,8.6],["Сан-Кристобаль",-72.22,7.77],["Кумана",-64.2,10.46]],
@@ -335,7 +340,7 @@ CA:[["Торонто",-79.38,43.65],["Монреаль",-73.57,45.5],["Ванк�
 // each province takes the largest city nearby (greedy: big cities claim their nearest free province first)
 function nameProvinces(){
   const groups={};
-  P.forEach(p=>{const key=p.lbl==='Гайана'?'GY':p.lbl==='Канада'?'CA':p.c0;(groups[key]=groups[key]||[]).push(p)});
+  P.forEach(p=>{const key=p.lbl==='Гайана'?'GY':p.lbl==='Канада'?'CA':p.lbl==='Фолкленды'?'FK':p.c0;(groups[key]=groups[key]||[]).push(p)});
   const lon=p=>p.x/K-125,lat=p=>62-p.y/K;
   Object.keys(groups).forEach(key=>{
     const ps=groups[key],cs=CITY[key]||[];
@@ -742,7 +747,10 @@ function applyRenames(){
 
 /* ---------- setup ---------- */
 function setup(){
-  LB.active=false;S=null;$('#fab').innerHTML='';const ov=$('#ov');ov.style.display='block';
+  LB.active=false;S=null;$('#fab').innerHTML='';
+  MP=null;PEACE=10;
+  if(MP_T){clearInterval(MP_T);MP_T=null}
+  if(MP_F){clearInterval(MP_F);MP_F=null}const ov=$('#ov');ov.style.display='block';
   const assigned=CKV().filter(c=>SEL[c]!==undefined);
   if(SELPL!=='SPEC'&&!assigned.includes(SELPL))SELPL=assigned[0]||null;
   const used=(FFA||ZERO)?Object.keys(SEL):[...new Set(Object.values(SEL))];
@@ -964,6 +972,7 @@ function allyUp(a,b){
   syncPuppets();
 }
 function proposeAlliance(c){
+  if(isHumanTarget(c)){dipRequest('ally',c,0);return}
   if(!dipGate(c,true))return;
   const pct=Math.round(0.4*chanceOf(teamPow(S.team[S.pl]),teamPow(S.team[c])));
   if(roll(pct)){allyUp(S.pl,c);L(`${CN[c].n} вступила в ваш союз.`)}
@@ -1024,7 +1033,7 @@ function betrayals(){
 
 /* ---------- stage 1: save and restore the whole game as one JSON document ---------- */
 // the map geometry is rebuilt from the settings, so only the state is stored
-const SNAP_KEYS=['mpNeutral','t','pl','team','act','out','G','master','share','manual','mobN','mobOut','kills','caps','touch','libd','rep','rel','truceEnd','cool','econ','econT','ideo','ideoN','ideoT','zf','shipQ','landT','fmv','fsel','prevNear','won','starOn','wasWar','zero','spec','reqTurn','dAmt','dReq','dMonths','mob','log','events','mode'];
+const SNAP_KEYS=['mpNeutral','human','humanOwner','t','pl','team','act','out','G','master','share','manual','mobN','mobOut','kills','caps','touch','libd','rep','rel','truceEnd','cool','econ','econT','ideo','ideoN','ideoT','zf','shipQ','landT','fmv','fsel','prevNear','won','starOn','wasWar','zero','spec','reqTurn','dAmt','dReq','dMonths','mob','log','events','mode'];
 const SNAP_ARRAYS=['ctl','u','q','annex','from','reb'];
 function snapshot(){
   const d={v:1,settings:{SCEN,PLUS,FFA,ZERO,NOCLIP,BOTDECIDE,SEL,SELPL,peace:PEACE}};
@@ -1201,7 +1210,7 @@ async function lbStart(){
   begin();
   S.mpNeutral=true;
   MP={code:LB.room,host:true,tn:1,queue,active:queue[0]||'bots',missed:{},deadline:Date.now()+TURN_MS,busy:false,lastActive:null};
-  Object.keys(slots).forEach(k=>{if(slots[k]!==ME)S.manual[k]=true});
+  S.human={};S.humanOwner={};Object.keys(slots).forEach(k=>{S.humanOwner[k]=slots[k];if(slots[k]!==ME)S.human[k]=true});
   await mpPublish();
   startMpLoops();
 }
@@ -1505,6 +1514,7 @@ async function mpPull(){
 }
 
 // Paraguay does not surrender for lost provinces: it surrenders only when its army is destroyed completely
+const isHuman=c=>!!(S.human&&S.human[c]);
 const armyCount=c=>P.reduce((x,p)=>x+(S.ctl[p.id]===c?tot(S.u[p.id])+tot(S.q[p.id]):0),0);
 const capitulatesNow=c=>c==='PY'?armyCount(c)===0:lostOf(c)>=Math.ceil(P.filter(p=>p.c===c).length*ideoV(c,'morale',0.5));
 
@@ -1567,8 +1577,12 @@ async function applyTurnOrders(tn,player){
   const slots=(rd&&rd.slots)||{};
   const c=Object.keys(slots).find(k=>slots[k]===player);
   const {data}=await DB.from('orders').select('o').eq('room',MP.code).eq('turn',tn).eq('player',player).order('id',{ascending:true});
-  if(c)(data||[]).forEach(r=>applyOrder(r.o,c));
-  if(S.plans.length)execPlans();
+  if(c){
+    const old=S.manual[c];
+    S.manual[c]=true;
+    (data||[]).forEach(r=>{applyOrder(r.o,c);if(S.plans.length)execPlans()});
+    S.manual[c]=old;
+  }
   await DB.from('orders').delete().eq('room',MP.code).lte('turn',tn);
 }
 async function sendOrder(o){
@@ -1590,6 +1604,8 @@ async function mpHostTick(){
   if(!MP||!MP.host||!DB||MP.busy)return;
   MP.busy=true;
   try{
+    await dipPoll();
+    await dipApply();
     const d=await mpRead();
     if(!d||!d.queue||!d.queue.length)return;
     if(MP.tn!==d.tn){
@@ -1609,7 +1625,7 @@ async function mpHostTick(){
       if(missed[gone]>=2&&gone!==ME){
         queue=queue.filter(x=>x!==gone);
         const c=Object.keys(d.slots||{}).find(k=>d.slots[k]===gone);
-        if(c)S.manual[c]=false;
+        if(c&&S.human)S.human[c]=false;
         L(`${gone} пропустил два хода и заменён ботом.`);
       }
       if(gone===ME)S.plans=[];
@@ -1622,6 +1638,7 @@ async function mpHostTick(){
 // guest loop: follows the room, restores the map when a turn was closed
 async function mpGuestTick(){
   if(!MP||MP.host||!DB)return;
+  await dipPoll();
   const d=await mpRead();
   if(!d)return;
   MP.active=d.active;MP.queue=d.queue;MP.missed=d.missed||{};MP.deadline=d.deadline;
@@ -1636,6 +1653,54 @@ function startMpLoops(){
   if(MP_F)clearInterval(MP_F);
   MP_T=setInterval(()=>{if(MP&&MP.host)mpHostTick();else if(MP)mpGuestTick()},2000);
   MP_F=setInterval(()=>{if(MP&&MP.active)renderFab()},1000);
+}
+
+/* ---------- diplomacy with human players: a request, then accept or refuse ---------- */
+let DIPIN=[];
+const isHumanTarget=c=>!!(MP&&S.humanOwner&&S.humanOwner[c]&&S.humanOwner[c]!==ME);
+async function dipRequest(kind,c,months){
+  const owner=S.humanOwner&&S.humanOwner[c];
+  if(!owner||!DB||!MP)return;
+  const {error}=await DB.from('orders').insert({room:MP.code,turn:MP.tn,player:owner,o:{k:'dipl',kind,from:S.pl,to:c,months:months||0,fromPlayer:ME}});
+  L(error?'Не отправилось: '+error.message:`Предложение отправлено игроку (${CN[c].n}).`);
+  render();
+}
+async function dipPoll(){
+  if(!MP||!DB)return;
+  const {data}=await DB.from('orders').select('id,o').eq('room',MP.code).eq('player',ME).contains('o',{k:'dipl'});
+  let changed=false;
+  (data||[]).forEach(r=>{if(!DIPIN.some(x=>x.id===r.id)){DIPIN.push(Object.assign({id:r.id},r.o));changed=true}});
+  const {data:res}=await DB.from('orders').select('id,o').eq('room',MP.code).eq('player',ME).contains('o',{k:'dipl_res'});
+  (res||[]).forEach(r=>{L(r.o.ok?'Твоё предложение приняли.':'Твоё предложение отклонили.');DB.from('orders').delete().eq('id',r.id).then(()=>{})});
+  if(changed||(res&&res.length))render();
+}
+async function dipAnswer(ok){
+  const r=DIPIN.shift();if(!r||!DB)return;
+  await DB.from('orders').delete().eq('id',r.id);
+  if(ok)await DB.from('orders').insert({room:MP.code,turn:MP.tn,player:ME,o:{k:'dipl_ans',kind:r.kind,from:r.from,to:r.to,months:r.months}});
+  if(r.fromPlayer)await DB.from('orders').insert({room:MP.code,turn:MP.tn,player:r.fromPlayer,o:{k:'dipl_res',ok,kind:r.kind,to:r.to}});
+  L(ok?'Ты согласился.':'Ты отказал.');
+  render();
+}
+function dipBanner(){
+  if(!DIPIN.length)return '';
+  const r=DIPIN[0];
+  const what={peace:'мир',truce:`перемирие на ${r.months} мес.`,ally:'союз'}[r.kind]||r.kind;
+  return `<div class="row"><b>${CN[r.from]?CN[r.from].n:r.from} предлагает ${what}.</b></div><div class="row"><button onclick="dipAnswer(true)">Согласиться</button><button class="g" onclick="dipAnswer(false)">Отказ</button></div>`;
+}
+// the host applies the answers: relations change in the game state
+async function dipApply(){
+  if(!MP||!MP.host||!DB)return;
+  const {data}=await DB.from('orders').select('id,o').eq('room',MP.code).contains('o',{k:'dipl_ans'});
+  if(!data||!data.length)return;
+  data.forEach(r=>{
+    const o=r.o,key=pairKey(o.from,o.to);
+    if(o.kind==='peace'){S.rel[key]='peace';delete S.truceEnd[key]}
+    else if(o.kind==='truce'){S.rel[key]='truce';S.truceEnd[key]=S.t+(o.months||3)}
+    else if(o.kind==='ally'){allyUp(o.from,o.to)}
+  });
+  await DB.from('orders').delete().in('id',data.map(r=>r.id));
+  await mpPublish();
 }
 
 /* ---------- bots and the navy ---------- */
@@ -1742,7 +1807,7 @@ function endTurnCore(){
   if(S.over||S.pending.length||S.plans.length)return;
   P.forEach(p=>{if(S.reb[p.id]>0&&isMy(S.ctl[p.id]))partisans(p.id)});
   P.forEach(p=>{if(S.reb[p.id]&&!isMy(S.ctl[p.id]))S.reb[p.id]=0});
-  CK.filter(c=>S.act[c]&&(!S.out[c]||S.master[c]!==undefined)&&!isMy(c))
+  CK.filter(c=>S.act[c]&&(!S.out[c]||S.master[c]!==undefined)&&!isMy(c)&&!isHuman(c))
     .sort(()=>Math.random()-.5).forEach(c=>{if(!S.over&&(!S.out[c]||S.master[c]!==undefined)){bot(c);botNaval(c);botDiplo(c)}});
   betrayals();
   check();
@@ -2143,7 +2208,7 @@ function render(){
   $('#cv').style.width=(S.z*100)+'%';
   draw();
   renderFab();
-  $('#pn').innerHTML=panel();
+  $('#pn').innerHTML=dipBanner()+panel();
   drawPreview();
 }
 
