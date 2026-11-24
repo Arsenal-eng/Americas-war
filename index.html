@@ -1739,7 +1739,7 @@ async function maybeTakeHost(d){
 }
 
 /* ---------- room cleanup: a game with nobody online, or a lobby with fewer than 2 players for 4 minutes ---------- */
-let BEAT_T=null;
+var BEAT_T=null;
 async function beat(){
   const room=MP?MP.code:LB.room;
   if(!DB||!room||!ME)return;
