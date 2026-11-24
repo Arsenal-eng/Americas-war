@@ -2191,8 +2191,11 @@ function renderFab(){
   let timer='';
   if(MP&&MP.active&&MP.active!=='bots'){
     const left=Math.max(0,Math.ceil(((MP.deadline||0)-Date.now())/1000));
-    timer=`<div class="mut">${MP.active===ME?'твой ход':'ход: '+MP.active} · ${left}с</div>`;
+    const who=Object.keys(S.humanOwner||{}).find(k=>S.humanOwner[k]===MP.active);
+    const whoName=who?CN[who].n:'';
+    timer=`<div class="mut">${MP.active===ME?'твой ход':'ход: '+(whoName||'игрок')} · ${left}с</div>`;
   }
+  if(MP)timer=`<div class="mut">я: ${CN[S.pl]?CN[S.pl].n:S.pl} · ${(ME||'').slice(-4)}</div>`+timer;
   $('#fab').innerHTML=timer
     +(hasP&&myTurn?`<button class="g" onclick="clearPlans()" title="Очистить приказы">X</button>`:'')
     +`<div class="col">${hasP&&myTurn?`<button onclick="execPlans()" title="Отдать приказы">!</button>`:''}${myTurn?`<button class="g" onclick="endTurn()" ${blocked?'disabled':''} title="Закончить ход">!!</button>`:''}</div>`;
