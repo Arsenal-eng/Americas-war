@@ -1073,6 +1073,7 @@ let DB=null,ME=null;
   if(!ME){ME='p'+Math.random().toString(36).slice(2,10);try{sessionStorage.setItem('americas-pid',ME)}catch(e){}}
   LB.name=(()=>{try{return sessionStorage.getItem('americas-name')||''}catch(e){return ''}})();
   try{DB=window.supabase.createClient(SB_URL,SB_KEY)}catch(e){DB=null}
+  startBeat();
   if(LB.active)renderLobby();
 })();
 const errText=e=>{const c=(e&&(e.code||e.name))||'';const m=(e&&e.message)||String(e);return `${c} ${m}`.trim()};
@@ -1165,14 +1166,18 @@ async function lbList(){
   Object.keys(LB.f).forEach(k=>{if(LB.f[k]!==undefined)q=q.eq(map[k],LB.f[k])});
   const {data,error}=await q;
   if(error)return lbMsg('Ошибка: '+error.message);
-  LB.list=(data||[]).map(roomRow);LB.msg='';renderLobby();
+  const keep=[];
+  for(const r of (data||[])){if(!(await checkRoom(r)))keep.push(r)}
+  LB.list=keep.map(roomRow);LB.msg='';renderLobby();
 }
 
 async function lbRandom(){
   if(!DB)return lbMsg('Нет связи с сервером.');
-  const {data}=await DB.from('rooms').select('code').eq('is_public',true).eq('status','lobby').limit(50);
-  if(!data||!data.length)return lbCreate(true);
-  LB.room=data[Math.random()*data.length|0].code;LB.msg='';await lbRefresh();
+  const {data}=await DB.from('rooms').select('*').eq('is_public',true).eq('status','lobby').limit(50);
+  const alive=[];
+  for(const r of (data||[])){if(!(await checkRoom(r)))alive.push(r)}
+  if(!alive.length)return lbCreate(true);
+  LB.room=alive[Math.random()*alive.length|0].code;LB.msg='';await lbRefresh();
 }
 
 async function lbJoin(){
@@ -1574,7 +1579,7 @@ function mpPublish(){
   return DB.from('rooms').update({state:snapshot()}).eq('code',MP.code);
 }
 async function mpRead(){
-  const {data}=await DB.from('rooms').select('queue,active,tn,deadline,closed_by,missed,slots,state').eq('code',MP.code).maybeSingle();
+  const {data}=await DB.from('rooms').select('queue,active,tn,deadline,closed_by,missed,slots,state,host,host_seen').eq('code',MP.code).maybeSingle();
   return data;
 }
 async function mpAdvance(tn,next,closedBy,queue,missed){
@@ -1620,6 +1625,8 @@ async function mpHostTick(){
     await dipApply();
     const d=await mpRead();
     if(!d||!d.queue||!d.queue.length)return;
+    if(d.host&&d.host!==ME){MP.host=false;return}
+    await DB.from('rooms').update({host_seen:Date.now()}).eq('code',MP.code);
     if(MP.tn!==d.tn){
       if(MP.lastActive&&MP.lastActive!=='bots'&&d.closed_by==='player')await applyTurnOrders(MP.tn,MP.lastActive);
       MP.tn=d.tn;MP.lastActive=d.active;
@@ -1653,6 +1660,7 @@ async function mpGuestTick(){
   await dipPoll();
   const d=await mpRead();
   if(!d)return;
+  await maybeTakeHost(d);
   MP.active=d.active;MP.queue=d.queue;MP.missed=d.missed||{};MP.deadline=d.deadline;
   if(MP.tn!==d.tn){
     MP.tn=d.tn;
@@ -1713,6 +1721,52 @@ async function dipApply(){
   });
   await DB.from('orders').delete().in('id',data.map(r=>r.id));
   await mpPublish();
+}
+
+/* ---------- host transfer: the first player in the queue takes over when the host has been silent for 15 seconds ---------- */
+async function maybeTakeHost(d){
+  if(!d.host||d.host===ME||!d.host_seen)return;
+  if(Date.now()-d.host_seen<15000)return;
+  const cand=(d.queue||[]).find(p=>p!==d.host);
+  if(cand!==ME)return;
+  const {data}=await DB.from('rooms').update({host:ME,host_seen:Date.now()}).eq('code',MP.code).eq('host',d.host).select('code');
+  if(data&&data.length){
+    MP.host=true;
+    L('Основатель не на связи: ты теперь основатель партии.');
+    await mpPublish();
+    render();
+  }
+}
+
+/* ---------- room cleanup: a game with nobody online, or a lobby with fewer than 2 players for 4 minutes ---------- */
+let BEAT_T=null;
+async function beat(){
+  const room=MP?MP.code:LB.room;
+  if(!DB||!room||!ME)return;
+  await DB.from('presence').upsert({room,player:ME,seen:Date.now()},{onConflict:'room,player'});
+}
+function startBeat(){if(!BEAT_T)BEAT_T=setInterval(beat,10000)}
+async function purgeRoom(code){
+  await DB.from('orders').delete().eq('room',code);
+  await DB.from('presence').delete().eq('room',code);
+  await DB.from('rooms').delete().eq('code',code);
+}
+// returns true when the room was deleted
+async function checkRoom(r){
+  if(!DB)return false;
+  const now=Date.now();
+  if(r.status==='playing'){
+    const {data}=await DB.from('presence').select('player').eq('room',r.code).gt('seen',now-30000);
+    if(!data||data.length===0){await purgeRoom(r.code);return true}
+    return false;
+  }
+  if((r.queue||[]).length>=2){
+    if(r.low_since!=null)await DB.from('rooms').update({low_since:null}).eq('code',r.code);
+    return false;
+  }
+  if(r.low_since==null){await DB.from('rooms').update({low_since:now}).eq('code',r.code);return false}
+  if(now-r.low_since>240000){await purgeRoom(r.code);return true}
+  return false;
 }
 
 /* ---------- bots and the navy ---------- */
