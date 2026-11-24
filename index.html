@@ -1657,7 +1657,7 @@ function startMpLoops(){
 
 /* ---------- diplomacy with human players: a request, then accept or refuse ---------- */
 let DIPIN=[];
-const isHumanTarget=c=>!!(MP&&S.humanOwner&&S.humanOwner[c]&&S.humanOwner[c]!==ME);
+const isHumanTarget=c=>!!(MP&&S.human&&S.human[c]&&!(S.humanOwner&&S.humanOwner[c]===ME));
 async function dipRequest(kind,c,months){
   const owner=S.humanOwner&&S.humanOwner[c];
   if(!owner||!DB||!MP)return;
@@ -1916,6 +1916,7 @@ function pick(e){
   S.fsel=null;
   if(id<0){S.grp=[];S.cnt={};S.focus=null;render();return}
   const ct=S.ctl[id];
+  if(MP&&!MP.host&&isMy(ct)&&MP.active!==ME){L('Сейчас ходит другой игрок: твой ход будет после него.');render();return}
   const adjG=S.grp.some(s=>P[s].adj.includes(id));
   if(isMy(ct)){
     if(S.grp.includes(id)){S.grp=S.grp.filter(s=>s!==id);delete S.cnt[id];S.focus=id}
