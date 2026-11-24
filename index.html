@@ -1550,7 +1550,7 @@ async function collectOrders(){
 }
 // guests do not keep plans locally: they go to the host
 function addPlan(p){
-  if(MP&&!MP.host){sendOrder(Object.assign({k:'plan'},p));return}
+  if(MP&&!MP.host){S.plans.push(p);sendOrder(Object.assign({k:'plan'},p));return}
   S.plans.push(p);
 }
 
@@ -2199,7 +2199,7 @@ function renderFab(){
   if(MP)timer=`<div class="mut">я: ${CN[S.pl]?CN[S.pl].n:S.pl} · ${(ME||'').slice(-4)}</div>`+timer;
   $('#fab').innerHTML=timer
     +(hasP&&myTurn?`<button class="g" onclick="clearPlans()" title="Очистить приказы">X</button>`:'')
-    +`<div class="col">${hasP&&myTurn?`<button onclick="execPlans()" title="Отдать приказы">!</button>`:''}${myTurn?`<button class="g" onclick="endTurn()" ${blocked?'disabled':''} title="Закончить ход">!!</button>`:''}</div>`;
+    +`<div class="col">${hasP&&myTurn&&(!MP||MP.host)?`<button onclick="execPlans()" title="Отдать приказы">!</button>`:''}${myTurn?`<button class="g" onclick="endTurn()" ${blocked?'disabled':''} title="Закончить ход">!!</button>`:''}</div>`;
 }
 
 function render(){
