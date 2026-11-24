@@ -1550,8 +1550,19 @@ async function collectOrders(){
 }
 // guests do not keep plans locally: they go to the host
 function addPlan(p){
-  if(MP&&!MP.host){S.plans.push(p);sendOrder(Object.assign({k:'plan'},p));return}
   S.plans.push(p);
+}
+// '!' for a participant: sends every plan that is not sent yet to the host
+async function guestSendPlans(silent){
+  if(!MP||MP.host||!DB)return;
+  if(MP.active!==ME&&!silent)return L('Сейчас ходит другой игрок.');
+  const todo=S.plans.filter(q=>!q.sent);
+  for(const q of todo){
+    const {error}=await DB.from('orders').insert({room:MP.code,turn:MP.tn,player:ME,o:{k:'plan',t:q.t,a:q.a,b:q.b,v:q.v}});
+    if(!error)q.sent=true;
+  }
+  if(todo.length&&!silent)L('Приказы отправлены основателю.');
+  render();
 }
 
 /* ---------- multiplayer step 3: turn queue, 40-second turns, bots play a round after the players ---------- */
@@ -1596,6 +1607,7 @@ async function sendOrder(o){
 async function mpEndMyTurn(){
   if(!MP||!DB||MP.active!==ME)return;
   const missed=Object.assign({},MP.missed||{});missed[ME]=0;
+  if(!MP.host)await guestSendPlans(true);
   if(MP.host){if(S.plans.length)execPlans();await mpPublish()}
   await mpAdvance(MP.tn,nextOf(MP.queue,ME),'player',MP.queue,missed);
 }
@@ -2199,7 +2211,7 @@ function renderFab(){
   if(MP)timer=`<div class="mut">я: ${CN[S.pl]?CN[S.pl].n:S.pl} · ${(ME||'').slice(-4)}</div>`+timer;
   $('#fab').innerHTML=timer
     +(hasP&&myTurn?`<button class="g" onclick="clearPlans()" title="Очистить приказы">X</button>`:'')
-    +`<div class="col">${hasP&&myTurn&&(!MP||MP.host)?`<button onclick="execPlans()" title="Отдать приказы">!</button>`:''}${myTurn?`<button class="g" onclick="endTurn()" ${blocked?'disabled':''} title="Закончить ход">!!</button>`:''}</div>`;
+    +`<div class="col">${hasP&&myTurn?`<button onclick="${MP&&!MP.host?'guestSendPlans()':'execPlans()'}" title="Отдать приказы">!</button>`:''}${myTurn?`<button class="g" onclick="endTurn()" ${blocked?'disabled':''} title="Закончить ход">!!</button>`:''}</div>`;
 }
 
 function render(){
